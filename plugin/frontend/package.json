@@ -1,0 +1,48 @@
+{
+  "name": "@quillfern/sql-examples",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "webpack --stats-error-details --mode production",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@ant-design/icons": "5.6.1",
+    "markdown-it": "14.1.0"
+  },
+  "peerDependencies": {
+    "@apache-superset/core": "*",
+    "antd": "^5.26.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2"
+  },
+  "devDependencies": {
+    "@ant-design/cssinjs": "1.24.0",
+    "@apache-superset/core": "0.1.0",
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@testing-library/dom": "8.20.1",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "12.1.5",
+    "@testing-library/user-event": "14.6.1",
+    "@types/jest": "29.5.14",
+    "@types/markdown-it": "14.1.2",
+    "@types/react": "^17.0.2",
+    "@types/react-dom": "17.0.26",
+    "antd": "5.27.6",
+    "dom-accessibility-api": "0.5.16",
+    "jest": "29.7.0",
+    "jest-environment-jsdom": "29.7.0",
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "ts-jest": "29.2.5",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.2",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1"
+  }
+}

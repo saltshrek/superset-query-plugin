@@ -1,0 +1,3 @@
+# Dependencies of the analyzers in this folder. code-source's build installs
+# them into a venv of its own; see build.gradle.kts.
+sqlglot==30.22.0

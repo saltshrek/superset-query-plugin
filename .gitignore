@@ -1,0 +1,16 @@
+.DS_Store
+.idea/
+.vscode/
+.env
+
+# plugin
+node_modules/
+plugin/dist/
+plugin/frontend/dist/
+*.supx
+
+# code-source
+.gradle/
+.kotlin/
+code-source/build/
+code-source/bin/

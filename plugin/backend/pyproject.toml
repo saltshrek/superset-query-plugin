@@ -1,0 +1,12 @@
+[project]
+name = "quillfern-sql-examples"
+version = "0.1.0"
+license = "Apache-2.0"
+
+# Superset imports these files in-process; they can use whatever Superset
+# itself depends on (Flask, Flask-AppBuilder, requests), nothing else.
+[tool.apache_superset_extensions.build]
+include = [
+    "src/quillfern/sql_examples/**/*.py",
+]
+exclude = []

@@ -1,0 +1,169 @@
+# Example: code-source on k8s, serving a repository over SSH to Superset.
+# An example to adapt, not a supported chart
+# (docs/features/011-production-image.md). Change at least:
+#   - the image, once you've built and pushed it (see ../Dockerfile);
+#   - REPO_URL, and the Secret's key and known_hosts;
+#   - the NetworkPolicy's selector, to match your Superset pods.
+#
+#   kubectl apply -n <namespace> -f kubernetes.yaml
+#
+# Superset's config then points the plugin here:
+#   SQL_EXAMPLES_CODE_SOURCE_URL = "http://code-source.<namespace>.svc:8080"
+# See plugin/DEPLOYMENT.md.
+---
+# Credentials as files (docs/features/005-authenticated-remotes.md). Create
+# it from real files instead of editing this:
+#   kubectl create secret generic code-source-repo \
+#     --from-file=ssh-key=./deploy_key --from-file=known-hosts=./known_hosts
+# For an HTTP(S) remote, set REPO_USERNAME and mount a password file as
+# REPO_PASSWORD_FILE instead.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: code-source-repo
+  labels:
+    app.kubernetes.io/name: code-source
+type: Opaque
+stringData:
+  # A read-only deploy key for the repository: the full private key file
+  # in OpenSSH format, including its BEGIN/END lines.
+  ssh-key: |
+    (contents of ./deploy_key)
+  # The git host's public keys, from a source you trust (e.g. GitHub
+  # publishes its own), in OpenSSH known_hosts format.
+  known-hosts: |
+    github.com ssh-ed25519 (the host's public key)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-source
+  labels:
+    app.kubernetes.io/name: code-source
+spec:
+  # Each replica keeps its own clone, so more replicas need nothing
+  # shared; they may briefly serve different commits after a push.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: code-source
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: code-source
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # Lets the user read the Secret's files, which are group-readable.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: code-source
+          image: registry.example.com/code-source:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: REPO_URL
+              value: ssh://git@github.com/example/sql-examples.git
+            # The branch or tag to serve; the remote's default if unset.
+            - name: REPO_REF
+              value: main
+            - name: REFRESH_INTERVAL_SECONDS
+              value: "300"
+            # The sqlglot dialect the examples are written in.
+            - name: SQL_DIALECT
+              value: trino
+            - name: REPO_SSH_KEY_FILE
+              value: /etc/code-source/repo/ssh-key
+            - name: REPO_SSH_KNOWN_HOSTS_FILE
+              value: /etc/code-source/repo/known-hosts
+            # The image sizes the heap from the memory limit; override here.
+            # - name: JAVA_OPTS
+            #   value: -XX:MaxRAMPercentage=60
+          # /health answers as soon as the server is up. The tree answers
+          # 503 not_ready until the repository's first load, so a pod gets
+          # no traffic before it can serve the tree.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/v1/tree
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/code-source
+            - name: tmp
+              mountPath: /tmp
+            - name: repo-credentials
+              mountPath: /etc/code-source/repo
+              readOnly: true
+      volumes:
+        # The clone. A cache: it's cloned again when the pod starts.
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: repo-credentials
+          secret:
+            secretName: code-source-repo
+            defaultMode: 0440
+---
+# Cluster-internal only: code-source has no auth, and browsers reach it
+# only through Superset (docs/features/002-backend-path.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-source
+  labels:
+    app.kubernetes.io/name: code-source
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: code-source
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Only Superset may call code-source. Its unauthenticated POST /refresh is
+# then out of reach of everything else in the cluster too. Takes effect
+# only where the cluster's network plugin enforces NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: code-source
+  labels:
+    app.kubernetes.io/name: code-source
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: code-source
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Superset's web pods; match your own labels. These are the
+        # official Helm chart's.
+        - podSelector:
+            matchLabels:
+              app: superset
+      ports:
+        - port: http

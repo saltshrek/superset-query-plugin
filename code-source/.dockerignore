@@ -1,0 +1,10 @@
+# Build output and caches from host-side Gradle runs; the image builds its own.
+build/
+bin/
+.gradle/
+.kotlin/
+**/__pycache__/
+# Tests aren't run in the image.
+src/test/
+deploy/
+image-test.sh

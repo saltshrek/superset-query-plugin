@@ -1,0 +1,24 @@
+# Runs code-source from its production image (code-source/Dockerfile)
+# instead of from source, as k8s would run it: read-only root filesystem,
+# writable DATA_DIR and /tmp only, no init process.
+#
+#   docker compose -f dev/compose.yaml -f dev/compose.image.yaml up --build
+#
+# dev/smoke-test.sh runs against it unchanged. Source changes need a
+# rebuild (`up --build code-source`); there's no auto-reload.
+
+services:
+  code-source:
+    # A name of its own, so building it doesn't replace the dev image.
+    image: sql-examples-dev-code-source-image
+    build: !override
+      context: ../code-source
+    init: !reset false
+    working_dir: !reset null
+    command: !reset null
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+      - /var/lib/code-source:mode=1777
+    volumes: !override
+      - sample_repo:/srv/git:ro

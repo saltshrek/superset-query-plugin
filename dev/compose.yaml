@@ -1,0 +1,180 @@
+# Dev-only environment for working on the plugin and code-source together.
+#
+#   docker compose -f dev/compose.yaml up
+#
+# Superset: http://localhost:8088 (admin / admin). code-source is only
+# reachable from inside the Compose network (http://code-source:8080).
+#
+# The Superset image is our 6.1.0 fork; see README.md in this directory for
+# how to build it. Override with SUPERSET_IMAGE=<image> if yours is tagged
+# differently.
+
+name: sql-examples-dev
+
+services:
+  superset:
+    image: ${SUPERSET_IMAGE:-superset-custom:6.1.0-mine}
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_CONFIG_PATH: /app/dev/superset_config.py
+      LOAD_EXAMPLES: ${LOAD_EXAMPLES:-yes}
+      # Read by superset_config.py; the plugin's backend calls code-source here.
+      CODE_SOURCE_URL: http://code-source:8080
+      # No FLASK_DEBUG: in debug mode Superset starts a LOCAL_EXTENSIONS
+      # watcher that restarts the server whenever plugin/dist is *read*
+      # (inotify open events), including while serving the plugin to the
+      # browser, so the plugin fails to load. superset-start.sh still runs
+      # with the reloader and debugger.
+    volumes:
+      - ./superset_config.py:/app/dev/superset_config.py:ro
+      - ./superset-start.sh:/app/dev/superset-start.sh:ro
+      # Loaded via LOCAL_EXTENSIONS, re-read from disk on each request.
+      - ../plugin:/app/extensions/sql-examples:ro
+      - superset_home:/app/superset_home
+      # plugin-dev touches a stamp here after rebuilding the plugin's
+      # backend; Superset restarts on it. See superset-start.sh.
+      - plugin_build_signal:/plugin-build
+    command: ["bash", "/app/dev/superset-start.sh"]
+    depends_on:
+      plugin-dev:
+        condition: service_healthy
+      code-source:
+        condition: service_started
+
+  # Rebuilds plugin/dist whenever plugin source changes; see plugin-watch.sh.
+  plugin-dev:
+    build:
+      context: .
+      dockerfile: plugin-dev.Dockerfile
+    init: true
+    working_dir: /plugin
+    volumes:
+      - ../plugin:/plugin
+      - plugin_node_modules:/plugin/frontend/node_modules
+      - ./plugin-watch.sh:/dev-scripts/plugin-watch.sh:ro
+      - plugin_build_signal:/plugin-build
+    command: ["bash", "/dev-scripts/plugin-watch.sh"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/plugin/dist/manifest.json"]
+      interval: 5s
+      start_period: 5m
+
+  # Restarts code-source whenever its source changes; see code-source-dev.sh.
+  code-source:
+    build:
+      context: .
+      dockerfile: code-source-dev.Dockerfile
+    init: true
+    working_dir: /code-source
+    environment:
+      PORT: "8080"
+      REPO_URL: file:///srv/git/examples.git
+      # Short, so sample-repo edits show up quickly.
+      REFRESH_INTERVAL_SECONDS: "10"
+      # The sample repository's queries are for the dev examples database.
+      SQL_DIALECT: sqlite
+    expose:
+      - "8080"
+    volumes:
+      - ../code-source:/code-source
+      - ./code-source-dev.sh:/dev-scripts/code-source-dev.sh:ro
+      # Keep container build output and caches off the host checkout, so
+      # host-side ./gradlew runs don't collide with the container's.
+      - code_source_build:/code-source/build
+      - code_source_project_cache:/code-source/.gradle
+      - code_source_kotlin:/code-source/.kotlin
+      - gradle_home:/root/.gradle
+      - sample_repo:/srv/git:ro
+    command: ["bash", "/dev-scripts/code-source-dev.sh"]
+    depends_on:
+      sample-repo:
+        condition: service_completed_successfully
+
+  # Builds a bare git repository from dev/sample-repo/ at
+  # file:///srv/git/examples.git, recreated on every start.
+  sample-repo:
+    image: alpine/git:latest
+    entrypoint: ["sh", "/sample-repo-init.sh"]
+    environment:
+      SPREAD_DATES: "1"
+    volumes:
+      - ./sample-repo:/seed:ro
+      - ./sample-repo-init.sh:/sample-repo-init.sh:ro
+      - sample_repo:/srv/git
+
+  # --- Tests (profile "test"); see README.md ---------------------------
+
+  # Runs plugin/backend/tests against a fresh Superset and a real
+  # code-source serving plugin/backend/tests/fixture-repo:
+  #   docker compose -f dev/compose.yaml --profile test run --rm plugin-backend-test
+  plugin-backend-test:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: plugin-backend-test.Dockerfile
+      args:
+        SUPERSET_IMAGE: ${SUPERSET_IMAGE:-superset-custom:6.1.0-mine}
+    environment:
+      SUPERSET_CONFIG_PATH: /app/dev/superset_test_config.py
+      CODE_SOURCE_URL: http://code-source-test:8080
+      # Read by the tests: a code-source that never becomes ready.
+      NOT_READY_CODE_SOURCE_URL: http://code-source-test:8081
+    volumes:
+      - ./superset_test_config.py:/app/dev/superset_test_config.py:ro
+      - ./plugin-backend-test.sh:/app/dev/plugin-backend-test.sh:ro
+      - ../plugin:/app/extensions/sql-examples:ro
+    entrypoint: ["bash", "/app/dev/plugin-backend-test.sh"]
+    depends_on:
+      plugin-dev:
+        condition: service_healthy
+      code-source-test:
+        condition: service_started
+
+  code-source-test:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: code-source-dev.Dockerfile
+    init: true
+    working_dir: /code-source
+    expose:
+      - "8080"
+      - "8081"
+    volumes:
+      - ../code-source:/code-source
+      - ./code-source-test.sh:/dev-scripts/code-source-test.sh:ro
+      # Separate from the dev service's, so both can build at once.
+      - code_source_test_build:/code-source/build
+      - code_source_test_project_cache:/code-source/.gradle
+      - code_source_test_kotlin:/code-source/.kotlin
+      - gradle_home:/root/.gradle
+      - fixture_repo:/srv/git:ro
+    command: ["bash", "/dev-scripts/code-source-test.sh"]
+    depends_on:
+      fixture-repo:
+        condition: service_completed_successfully
+
+  fixture-repo:
+    profiles: [test]
+    image: alpine/git:latest
+    entrypoint: ["sh", "/sample-repo-init.sh"]
+    volumes:
+      - ../plugin/backend/tests/fixture-repo:/seed:ro
+      - ./sample-repo-init.sh:/sample-repo-init.sh:ro
+      - ../plugin/backend/tests/fixture-repo-generate.sh:/seed-generate.sh:ro
+      - fixture_repo:/srv/git
+
+volumes:
+  superset_home:
+  plugin_node_modules:
+  plugin_build_signal:
+  code_source_build:
+  code_source_project_cache:
+  code_source_kotlin:
+  gradle_home:
+  sample_repo:
+  code_source_test_build:
+  code_source_test_project_cache:
+  code_source_test_kotlin:
+  fixture_repo:
